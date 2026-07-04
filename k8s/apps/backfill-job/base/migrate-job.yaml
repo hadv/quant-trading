@@ -13,6 +13,7 @@ spec:
       labels:
         app: db-migration
     spec:
+      serviceAccountName: backfill-worker-sa
       containers:
       - name: liquibase
         image: liquibase/liquibase:4.23.0

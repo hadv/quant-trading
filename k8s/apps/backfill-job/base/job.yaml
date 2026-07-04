@@ -13,6 +13,7 @@ spec:
       labels:
         app: backfill-service
     spec:
+      serviceAccountName: backfill-worker-sa
       containers:
       - name: backfill-worker
         image: ghcr.io/hadv/quant-backfill:latest
