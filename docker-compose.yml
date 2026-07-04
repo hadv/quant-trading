@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: quantdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  liquibase:
+    image: liquibase/liquibase:4.23.0
+    command: 
+      - --url=jdbc:postgresql://db:5432/quantdb
+      - --username=user
+      - --password=pass
+      - --changeLogFile=db.changelog-master.sql
+      - update
+    volumes:
+      - ./db/changelog:/liquibase/changelog
+    workingDir: /liquibase/changelog
+    depends_on:
+      - db
+
+volumes:
+  pgdata:

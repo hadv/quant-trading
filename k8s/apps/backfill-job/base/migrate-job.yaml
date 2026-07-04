@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migration
+  namespace: quant-trading
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: db-migration
+    spec:
+      containers:
+      - name: liquibase
+        image: liquibase/liquibase:4.23.0
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            liquibase --url="$JDBC_URI" --changeLogFile=db.changelog-master.sql update
+        env:
+        - name: JDBC_URI
+          valueFrom:
+            secretKeyRef:
+              name: cnpg-cluster-app-secret
+              key: jdbc-uri
+        volumeMounts:
+          - name: changelog-volume
+            mountPath: /liquibase/changelog
+        workingDir: /liquibase/changelog
+      volumes:
+        - name: changelog-volume
+          configMap:
+            name: db-changelog-config
+      restartPolicy: Never

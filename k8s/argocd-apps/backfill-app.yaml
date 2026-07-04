@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: quant-backfill-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/hadv/quant-trading.git'
+    targetRevision: main
+    path: k8s/apps/backfill-job/overlays/prod
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: quant-trading
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
