@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+aiokafka
+langchain
+langchain-openai
+langchain-anthropic
+langchain-google-genai
+langchain-community
+langchain-chroma
+chromadb
+tiktoken
+python-dotenv
+asyncpg
+alembic
+psycopg2-binary

@@ -52,5 +52,27 @@ services:
     ports:
       - "8000:8000"
 
+  fundamental_agent:
+    build:
+      context: ./python/fundamental_agent
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://user:pass@db:5432/fundamentaldb
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CONSUMER_GROUP: fundamental_agent_group
+      KAFKA_TOPIC_IN: market.events
+      KAFKA_TOPIC_OUT: analysis.events
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy-key}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-3.5-turbo}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
+    depends_on:
+      - db
+      - kafka
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/app/chroma_db
+
 volumes:
   pgdata:
+  chroma_data:
