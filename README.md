@@ -2,17 +2,22 @@
 
 Dự án Quant Trading (theo chuẩn Clean Architecture & GitOps) phục vụ cho hệ thống Backtest đệ quy và giao dịch.
 
-Hiện tại, dự án đang chứa service đầu tiên:
-- **Backfill Service**: Chịu trách nhiệm kéo dữ liệu nến (OHLCV) từ thị trường và lưu trữ vào cơ sở dữ liệu.
+Hiện tại, dự án bao gồm các service và agent sau:
+- **Backfill Service (Go)**: Chịu trách nhiệm kéo dữ liệu nến (OHLCV) từ thị trường và lưu trữ vào cơ sở dữ liệu.
+- **Fractal Analyzer (Python)**: Lắng nghe luồng dữ liệu nến, tính toán các chỉ số Fractal (Hurst Exponent, Fractal Dimension) để đánh giá rủi ro thị trường.
+- **Fundamental Agent (Python)**: Sử dụng AI/LLM và cấu trúc Agentic RAG (ChromaDB) để đọc báo cáo tài chính, đánh giá định giá nội tại (Intrinsic Value) và lợi thế cạnh tranh (Moat Score).
 
 ## Cấu trúc thư mục
 
-- `cmd/backfill-job/`: Điểm khởi chạy của ứng dụng, chứa hàm `main()` và `Dockerfile`.
-- `db/changelog/`: Các file SQL migration được quản lý bởi Liquibase.
-- `internal/`: Logic nghiệp vụ lõi (Clean Architecture).
+- `cmd/backfill-job/`: Điểm khởi chạy của ứng dụng Go, chứa hàm `main()` và `Dockerfile`.
+- `db/changelog/`: Các file SQL migration được quản lý bởi Liquibase cho DB chính.
+- `internal/`: Logic nghiệp vụ lõi (Clean Architecture) cho các dịch vụ Go.
   - `domain/`: Khai báo Entity và Interface.
   - `infrastructure/`: Implement kết nối Database (Postgres), gọi API thị trường, và cài đặt Telemetry.
   - `usecase/`: Chứa nghiệp vụ điều phối chính (Backfill Service).
+- `python/`: Nơi chứa các dịch vụ AI và Data Science.
+  - `fractal_analyzer/`: Agent tính toán chỉ báo Fractal.
+  - `fundamental_agent/`: Agent phân tích cơ bản bằng RAG (ChromaDB) và LLM.
 - `k8s/`: Cấu hình triển khai lên Kubernetes thông qua Kustomize và ArgoCD.
 - `pkg/`: Các package dùng chung (ví dụ: Slice Pool để tối ưu bộ nhớ).
 
