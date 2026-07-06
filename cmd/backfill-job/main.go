@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/hadv/quant-trading/internal/domain"
 	"github.com/hadv/quant-trading/internal/infrastructure/api"
 	"github.com/hadv/quant-trading/internal/infrastructure/database"
 	"github.com/hadv/quant-trading/internal/infrastructure/telemetry"
@@ -28,7 +29,27 @@ func main() {
 	}
 	defer dbPool.Close()
 
-	apiClient := api.NewMarketClient(5)
+	var apiClient domain.IMarketClient
+	useMock := os.Getenv("USE_MOCK_API")
+	if useMock == "true" || useMock == "" { // Default to mock for now
+		mockData := map[string][]domain.Candle{
+			"AAPL": {
+				{Ticker: "AAPL", Open: 150.0, Close: 154.0, Volume: 1000, Date: "2010-01-04"},
+				{Ticker: "AAPL", Open: 154.0, Close: 157.0, Volume: 1200, Date: "2010-01-05"},
+			},
+		}
+		apiClient = api.NewMockMarketClient(mockData)
+		slog.Info("Sử dụng MockMarketClient")
+	} else {
+		baseURL := os.Getenv("MARKET_API_URL")
+		apiKey := os.Getenv("MARKET_API_KEY")
+		if baseURL == "" {
+			baseURL = "https://api.example.com"
+		}
+		apiClient = api.NewMarketClient(baseURL, apiKey, 5)
+		slog.Info("Sử dụng RealMarketClient")
+	}
+
 	dbRepo := database.NewPgRepository(dbPool)
 	service := usecase.NewBackfillService(apiClient, dbRepo)
 
