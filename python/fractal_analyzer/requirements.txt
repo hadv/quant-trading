@@ -9,3 +9,4 @@ scipy
 aiokafka
 alembic
 psycopg2-binary
+torch

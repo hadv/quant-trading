@@ -1,62 +1,71 @@
 import logging
 import numpy as np
+import torch
 from scipy import optimize
-from scipy.linalg import toeplitz, cho_factor, cho_solve
 
 logger = logging.getLogger(__name__)
 
-def _fgn_autocovariance(H: float, n: int) -> np.ndarray:
+# Device selection: use CUDA if available, otherwise CPU
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def _fgn_correlation_matrix_torch(H: float, n: int) -> torch.Tensor:
     """
-    Computes the auto-covariance sequence for fractional Gaussian noise (fGn).
+    Constructs the Toeplitz correlation matrix for fGn directly on the target device.
     """
-    k = np.arange(n)
-    k_plus_1 = np.abs(k + 1.0)
-    k_minus_1 = np.abs(k - 1.0)
-    k_abs = np.abs(k)
+    k = torch.arange(n, dtype=torch.float64, device=DEVICE)
+    k_plus_1 = torch.abs(k + 1.0)
+    k_minus_1 = torch.abs(k - 1.0)
+    k_abs = torch.abs(k)
     
-    return 0.5 * (k_plus_1**(2*H) - 2 * k_abs**(2*H) + k_minus_1**(2*H))
+    r = 0.5 * (k_plus_1**(2*H) - 2 * k_abs**(2*H) + k_minus_1**(2*H))
+    
+    # Efficiently construct Toeplitz matrix without loops
+    c = torch.arange(n, device=DEVICE)
+    r_idx = torch.abs(c.unsqueeze(0) - c.unsqueeze(1))
+    return r[r_idx]
 
-def _fgn_correlation_matrix(H: float, n: int) -> np.ndarray:
+def _profile_log_likelihood_torch(H: float, returns_tensor: torch.Tensor) -> float:
     """
-    Constructs the Toeplitz correlation matrix for fGn.
+    Calculates the negative profile log-likelihood for H using PyTorch.
+    returns_tensor: 1D tensor of zero-mean returns.
     """
-    r = _fgn_autocovariance(H, n)
-    return toeplitz(r)
-
-def _profile_log_likelihood(H: float, returns: np.ndarray) -> float:
-    """
-    Calculates the negative profile log-likelihood for H.
-    returns: array-like of zero-mean returns.
-    """
-    n = len(returns)
-    R_H = _fgn_correlation_matrix(H, n)
+    n = returns_tensor.shape[0]
+    R_H = _fgn_correlation_matrix_torch(H, n)
     
     try:
-        # Cholesky decomposition of R_H: R_H = L L^T
-        L, lower = cho_factor(R_H, lower=True)
+        # Cholesky decomposition: R_H = L L^T
+        # Add a tiny jitter to the diagonal for numerical stability, especially for H close to 0 or 1
+        jitter = torch.eye(n, dtype=torch.float64, device=DEVICE) * 1e-8
+        L = torch.linalg.cholesky(R_H + jitter)
     except Exception:
-        # If matrix is not positive definite
-        return np.inf
+        # Not positive definite or other linear algebra error
+        return float('inf')
 
     # Calculate log determinant: log|R_H| = 2 * sum(log(diag(L)))
-    log_det = 2.0 * np.sum(np.log(np.diag(L)))
+    log_det = 2.0 * torch.sum(torch.log(torch.diag(L)))
     
-    # Calculate X^T R_H^{-1} X using cholesky solver
-    quad_form = np.dot(returns, cho_solve((L, lower), returns))
+    # Calculate X^T R_H^{-1} X
+    # returns_tensor is (n,), we need (n, 1) for cholesky_solve
+    x_col = returns_tensor.unsqueeze(1)
+    
+    # cholesky_solve returns R_H^{-1} x. Then we dot it with X^T.
+    inv_R_H_x = torch.cholesky_solve(x_col, L)
+    
+    quad_form = torch.matmul(returns_tensor.unsqueeze(0), inv_R_H_x).squeeze()
     
     if quad_form <= 0:
-        return np.inf
+        return float('inf')
         
-    # The profile negative log-likelihood (ignoring constants)
-    return (1.0 / n) * log_det + np.log(quad_form)
+    # The profile negative log-likelihood
+    val = (1.0 / n) * log_det + torch.log(quad_form)
+    return val.item()
 
-def estimate_hurst_mle(prices: np.ndarray, max_points: int = 400) -> float:
+def estimate_hurst_mle(prices: np.ndarray, max_points: int = 10000) -> float:
     """
     Estimates the Hurst exponent using Maximum Likelihood Estimation on Fractional Gaussian Noise.
-    If the number of points exceeds max_points, it uses the most recent max_points 
-    to reflect the current market regime and ensure computational efficiency.
+    Utilizes PyTorch for O(N^3) matrix operations, allowing max_points to be safely set 
+    much higher (e.g., 10000) for far greater accuracy.
     """
-    # Use the most recent max_points to reflect current regime and keep O(N^3) fast
     if len(prices) > max_points:
         prices = prices[-max_points:]
         
@@ -69,8 +78,11 @@ def estimate_hurst_mle(prices: np.ndarray, max_points: int = 400) -> float:
     if np.all(returns == 0) or len(returns) < 10:
         return 0.5
         
+    # Pre-load the returns array to the target device (GPU if available)
+    returns_tensor = torch.tensor(returns, dtype=torch.float64, device=DEVICE)
+    
     def objective(x):
-        return _profile_log_likelihood(x, returns)
+        return _profile_log_likelihood_torch(x, returns_tensor)
         
     try:
         res = optimize.minimize_scalar(
