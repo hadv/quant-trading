@@ -7,7 +7,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from pydantic import ValidationError
 from app.models.domain import FundamentalData, FundamentalScore, DCFResult, MoatResult
-from app.core.rag.tools import search_financial_records
+from app.core.rag.tools import search_vector_database, get_full_financial_report
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,8 @@ Phân tích cẩn thận và trả về JSON chuẩn khớp với cấu trúc đ
 MOAT_SYSTEM_PROMPT = """Bạn là chuyên gia phân tích chiến lược kinh doanh (phong cách Philip Fisher).
 Nhiệm vụ của bạn là đánh giá lợi thế cạnh tranh (Moat Score từ 1 đến 10) của doanh nghiệp.
 Cổ phiếu: {ticker}.
-Sử dụng công cụ `search_financial_records` để tìm kiếm báo cáo thường niên, thông tin đối thủ.
+Sử dụng công cụ `get_full_financial_report` để lấy toàn văn báo cáo tài chính (10-K, 10-Q) nhằm phân tích sâu chiến lược dài hạn.
+Sử dụng công cụ `search_vector_database` để tìm kiếm các tin tức ngắn, sự kiện rủi ro gần đây.
 KHÔNG bọc JSON trong Markdown ```json ... ```, chỉ in ra raw JSON string.
 Cấu trúc bắt buộc:
 {{
@@ -84,7 +85,7 @@ class LLMEngine:
         self.dcf_chain = self.dcf_prompt | self.dcf_llm.with_structured_output(DCFResult)
         
         # --- Moat Agent ---
-        self.tools = [search_financial_records]
+        self.tools = [search_vector_database, get_full_financial_report]
         self.moat_prompt = ChatPromptTemplate.from_messages([
             ("system", MOAT_SYSTEM_PROMPT),
             ("user", "Hãy đánh giá Moat Score cho {ticker}."),
