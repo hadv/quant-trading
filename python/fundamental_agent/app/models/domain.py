@@ -24,3 +24,11 @@ class FundamentalScore(BaseModel):
     intrinsic_value: float = Field(..., description="Estimated intrinsic value per share")
     moat_score: int = Field(..., ge=1, le=10, description="Economic moat score from 1 to 10")
     reasoning: str = Field(..., description="Reasoning behind the assessment")
+
+class DCFResult(BaseModel):
+    intrinsic_value: float = Field(..., description="Estimated intrinsic value per share calculated via DCF logic")
+    dcf_reasoning: str = Field(..., description="Explanation of the math and assumptions used for the intrinsic value")
+
+class MoatResult(BaseModel):
+    moat_score: int = Field(..., ge=1, le=10, description="Economic moat score from 1 to 10")
+    moat_reasoning: str = Field(..., description="Explanation of the competitive advantage assessment based on qualitative data")
