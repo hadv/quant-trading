@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 import numpy as np
-from hurst import compute_Hc
+from app.core.mle import estimate_hurst_mle
 from app.models.domain import FractalRisk
 from app.core.config import settings
 
@@ -20,7 +20,8 @@ def analyze_fractal_risk(ticker: str, prices: list[float]) -> FractalRisk:
 
     series = np.array(prices)
     try:
-        H, _, _ = compute_Hc(series, kind='price', simplified=True)
+        # Use Maximum Likelihood Estimation for fractional Gaussian noise
+        H = estimate_hurst_mle(series)
     except Exception as e:
         logger.error(f"Error computing Hurst for {ticker}: {e}")
         H = 0.5
