@@ -5,7 +5,7 @@ pydantic-settings
 asyncpg
 numpy
 pandas
-hurst
+scipy
 aiokafka
 alembic
 psycopg2-binary
