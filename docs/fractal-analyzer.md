@@ -35,3 +35,10 @@ docker-compose exec fractal_analyzer alembic upgrade head
 ## Luồng sự kiện (Event Flow)
 1. **Input**: `market.events` -> `{ "event_type": "DailyCandleClosed", "ticker": "...", "close_price": ... }`
 2. **Output**: `analysis.events` -> `{ "event_type": "FractalRiskAssessed", "ticker": "...", "hurst_exponent": 0.65, "regime": "Trending" }`
+
+## Tối ưu hóa hiệu năng (GPU/PyTorch)
+Để xử lý phân rã ma trận Cholesky với khối lượng dữ liệu khổng lồ (lên đến 10,000 điểm dữ liệu), hệ thống đã được tích hợp PyTorch để gia tốc bằng GPU (CUDA).
+- **Core Logic**: Sử dụng `torch.linalg.cholesky` và `torch.cholesky_solve` trong file `mle.py`.
+- **Cơ chế**: Ma trận Toeplitz được khởi tạo trực tiếp trên VRAM của GPU, tránh hoàn toàn độ trễ truyền dữ liệu (PCIe Latency) giữa RAM và GPU.
+- **Fallback an toàn**: Nếu môi trường deploy không có GPU (ví dụ chạy trên laptop bình thường), code sẽ tự động lùi về sử dụng CPU thông qua `torch.device("cpu")`.
+- **Lưu ý triển khai**: Yêu cầu môi trường phải cài đặt `torch`. Nếu chạy bằng Docker, cần đảm bảo base image có cài sẵn NVIDIA CUDA và máy host đã cài đặt NVIDIA Container Toolkit.
