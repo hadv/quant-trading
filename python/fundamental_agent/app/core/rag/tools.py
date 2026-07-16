@@ -1,5 +1,8 @@
 from langchain.tools import tool
 import logging
+import os
+import boto3
+import requests
 from app.core.rag.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -58,38 +61,46 @@ def get_full_financial_report(ticker: str, doc_type: str, year_quarter: str) -> 
     """
     logger.info(f"LLM called tool get_full_financial_report with ticker={ticker}, doc_type={doc_type}, year_quarter={year_quarter}")
     
-    # MOCK DATA FOR DEMONSTRATION PURPOSES
-    # In a real system, this would query a database (e.g., Postgres, MongoDB) or an object store (e.g., S3) 
-    # to fetch the actual long-form document.
+    s3_bucket = os.getenv("S3_BUCKET_NAME", "quant-trading")
+    s3_endpoint = os.getenv("S3_ENDPOINT_URL", "http://localhost:9000")
+    ocr_api_url = os.getenv("PROTONX_OCR_API_URL", "http://localhost:8080/ocr")
     
-    if ticker.upper() == "FPT":
-        return f"""
-        [MOCK FULL REPORT {doc_type} {year_quarter} FOR FPT]
-        Báo cáo chi tiết:
-        1. Tổng quan: FPT tiếp tục duy trì vị thế dẫn đầu trong mảng công nghệ thông tin tại Việt Nam. Doanh thu chuyển đổi số thị trường nước ngoài tăng trưởng 25% so với cùng kỳ.
-        2. Lợi thế cạnh tranh (Moat): Nguồn nhân lực kỹ sư phần mềm dồi dào, chi phí cạnh tranh so với Ấn Độ và Đông Âu. Khả năng cung cấp dịch vụ End-to-End từ tư vấn đến triển khai hệ thống AI/Cloud.
-        3. Rủi ro: Rủi ro tỷ giá do doanh thu chủ yếu từ nước ngoài (Nhật Bản, Mỹ). Rủi ro cạnh tranh nhân sự chất lượng cao.
-        4. Chiến lược tương lai: Mở rộng thâu tóm các công ty tư vấn tại Mỹ để tăng cường năng lực mảng AI và Data Analytics.
-        """
-    elif ticker.upper() == "VCB":
-         return f"""
-        [MOCK FULL REPORT {doc_type} {year_quarter} FOR VCB]
-        Báo cáo chi tiết:
-        1. Tổng quan: Ngân hàng TMCP Ngoại thương Việt Nam ghi nhận mức lợi nhuận trước thuế cao nhất ngành. Tỷ lệ nợ xấu (NPL) được kiểm soát ở mức cực kỳ thấp dưới 1%.
-        2. Lợi thế cạnh tranh (Moat): Thương hiệu mạnh nhất trong ngành ngân hàng, nguồn vốn huy động giá rẻ (CASA) cực lớn giúp chi phí vốn (Cost of Funds) luôn ở mức thấp nhất hệ thống. Quan hệ chặt chẽ với các tổng công ty nhà nước và doanh nghiệp FDI.
-        3. Rủi ro: Tín dụng chủ yếu tập trung vào các tập đoàn lớn, nếu có cú sốc vĩ mô sẽ chịu ảnh hưởng.
-        """
-    elif ticker.upper() == "HPG":
-         return f"""
-        [MOCK FULL REPORT {doc_type} {year_quarter} FOR HPG]
-        Báo cáo chi tiết:
-        1. Tổng quan: Hòa Phát tiếp tục giữ thị phần thép xây dựng số 1 Việt Nam. Lợi nhuận phục hồi nhờ giá than cốc giảm và sản lượng bán hàng tăng trưởng trở lại.
-        2. Lợi thế cạnh tranh (Moat): Lợi thế quy mô (Economies of Scale) lớn nhất Đông Nam Á với khu liên hợp Dung Quất. Chuỗi giá trị khép kín từ quặng sắt, than đá đến thép thành phẩm giúp HPG có giá thành sản xuất thấp nhất khu vực, tạo rào cản gia nhập khổng lồ.
-        3. Dự án tương lai: Dung Quất 2 đang triển khai đúng tiến độ, dự kiến bổ sung 5.6 triệu tấn thép cuộn cán nóng (HRC) mỗi năm, giúp HPG vươn lên thành nhà sản xuất HRC lớn nhất Đông Nam Á.
-        """
-    else:
-        return f"""
-        [MOCK FULL REPORT {doc_type} {year_quarter} FOR {ticker}]
-        Dữ liệu chi tiết cho mã {ticker} hiện chưa có trong cơ sở dữ liệu mock.
-        Tuy nhiên, doanh nghiệp tiếp tục hoạt động kinh doanh cốt lõi với biên lợi nhuận ổn định.
-        """
+    try:
+        s3 = boto3.client(
+            's3',
+            endpoint_url=s3_endpoint,
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "minioadmin"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
+        )
+        
+        prefix = f"financial-reports/{ticker.upper()}/{year_quarter}_{doc_type}"
+        
+        response = s3.list_objects_v2(Bucket=s3_bucket, Prefix=prefix)
+        if 'Contents' not in response or not response['Contents']:
+            return f"No financial report found for {ticker} ({doc_type} {year_quarter})."
+            
+        # Get the first matching file (e.g. .pdf or .txt)
+        file_key = response['Contents'][0]['Key']
+        logger.info(f"Found report file: {file_key}")
+        
+        file_obj = s3.get_object(Bucket=s3_bucket, Key=file_key)
+        file_content = file_obj['Body'].read()
+        
+        if file_key.lower().endswith('.pdf'):
+            logger.info("PDF file detected, sending to ProtonX OCR API...")
+            files = {'file': (os.path.basename(file_key), file_content, 'application/pdf')}
+            
+            # Allow up to 120 seconds for the OCR API to process a large PDF
+            ocr_response = requests.post(ocr_api_url, files=files, timeout=120)
+            ocr_response.raise_for_status()
+            
+            result = ocr_response.json()
+            return result.get('text', result.get('markdown', str(result)))
+            
+        else:
+            # Assume text based
+            return file_content.decode('utf-8')
+            
+    except Exception as e:
+        logger.error(f"Error fetching/parsing report for {ticker}: {e}")
+        return f"Error retrieving report data: {str(e)}"
