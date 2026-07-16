@@ -65,6 +65,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy-key}
       LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-3.5-turbo}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-quant-trading}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://localhost:9000}
+      PROTONX_OCR_API_URL: ${PROTONX_OCR_API_URL:-http://localhost:8080/ocr}
     depends_on:
       - db
       - kafka
