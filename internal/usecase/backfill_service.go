@@ -35,31 +35,71 @@ func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
 
 	numInserters := numWorkers
 
-	// 1. Khởi chạy Inserter Pool
+	// 1. Khởi chạy Inserter Pool (Ghi DB gom nhóm)
 	for i := 0; i < numInserters; i++ {
 		insertWg.Add(1)
 		go func() {
 			defer insertWg.Done()
 			ctx := context.Background()
 
-			for result := range insertJobs {
-				// Dù thành công hay lỗi, Inserter LUÔN phải trả slice lại cho pool
-				if result.Error != nil {
-					slog.ErrorContext(ctx, "Fetch thất bại", slog.String("ticker", result.Ticker), slog.String("err", result.Error.Error()))
-					pool.CandleSlicePool.Put(result.CandlesPtr)
-					continue
-				}
+			batchCandles := make([]domain.Candle, 0, 5000)
+			batchPointers := make([]*[]domain.Candle, 0)
+			
+			// Ticker để xả buffer mỗi 1 giây (nếu chưa gom đủ 5000 nến)
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
 
-				candles := *result.CandlesPtr
-				if len(candles) > 0 {
-					if err := s.dbRepo.SaveCandlesAndEvents(ctx, candles); err != nil {
-						slog.ErrorContext(ctx, "Lưu Database thất bại", slog.String("ticker", result.Ticker), slog.String("err", err.Error()))
+			flush := func() {
+				if len(batchCandles) > 0 {
+					if err := s.dbRepo.SaveCandlesAndEvents(ctx, batchCandles); err != nil {
+						slog.ErrorContext(ctx, "Lưu Database thất bại (Batch)", slog.String("err", err.Error()))
 					} else {
-						slog.InfoContext(ctx, "Backfill thành công", slog.String("ticker", result.Ticker), slog.Int("records", len(candles)))
+						slog.InfoContext(ctx, "Backfill Batch thành công", slog.Int("records", len(batchCandles)))
 					}
 				}
+				
+				// Trả các slice gốc về Pool sau khi đã ghi DB xong
+				for _, ptr := range batchPointers {
+					pool.CandleSlicePool.Put(ptr)
+				}
+				
+				batchCandles = batchCandles[:0]
+				batchPointers = batchPointers[:0]
+			}
 
-				pool.CandleSlicePool.Put(result.CandlesPtr)
+			for {
+				select {
+				case result, ok := <-insertJobs:
+					if !ok {
+						// Khi channel bị đóng, xả nốt những dữ liệu còn sót lại trong buffer rồi thoát
+						flush()
+						return
+					}
+
+					if result.Error != nil {
+						slog.ErrorContext(ctx, "Fetch thất bại", slog.String("ticker", result.Ticker), slog.String("err", result.Error.Error()))
+						pool.CandleSlicePool.Put(result.CandlesPtr)
+						continue
+					}
+
+					candles := *result.CandlesPtr
+					if len(candles) > 0 {
+						batchCandles = append(batchCandles, candles...)
+						batchPointers = append(batchPointers, result.CandlesPtr)
+						
+						// Xả xuống DB nếu đủ số lượng
+						if len(batchCandles) >= 5000 {
+							flush()
+						}
+					} else {
+						// Bỏ qua nến rỗng, trả luôn về pool
+						pool.CandleSlicePool.Put(result.CandlesPtr)
+					}
+
+				case <-ticker.C:
+					// Xả theo chu kỳ thời gian
+					flush()
+				}
 			}
 		}()
 	}
@@ -84,7 +124,7 @@ func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
 					Error:      err,
 				}
 
-				time.Sleep(500 * time.Millisecond) // Global API rate limit
+				time.Sleep(500 * time.Millisecond)
 			}
 		}()
 	}
