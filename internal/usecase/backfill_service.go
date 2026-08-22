@@ -8,7 +8,7 @@ import (
 	"github.com/hadv/quant-trading/internal/domain"
 	"github.com/hadv/quant-trading/pkg/pool"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 )
 
 type BackfillService struct {
@@ -20,47 +20,82 @@ func NewBackfillService(api domain.IMarketClient, db domain.IDatabase) *Backfill
 	return &BackfillService{apiClient: api, dbRepo: db}
 }
 
-func (s *BackfillService) processSingleTicker(ctx context.Context, ticker string) error {
-	candlesPtr := pool.CandleSlicePool.Get().(*[]domain.Candle)
-	candles := (*candlesPtr)[:0]
-	defer pool.CandleSlicePool.Put(candlesPtr)
-
-	if err := s.apiClient.FetchHistoricalData(ctx, ticker, &candles); err != nil {
-		return err
-	}
-	if len(candles) == 0 {
-		return nil
-	}
-	if err := s.dbRepo.SaveCandlesAndEvents(ctx, candles); err != nil {
-		return err
-	}
-
-	slog.InfoContext(ctx, "Backfill thành công", slog.String("ticker", ticker), slog.Int("records", len(candles)))
-	return nil
+type FetchResult struct {
+	Ticker     string
+	CandlesPtr *[]domain.Candle
+	Error      error
 }
 
 func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
-	jobs := make(chan string, len(tickers))
-	var wg sync.WaitGroup
+	fetchJobs := make(chan string, len(tickers))
+	insertJobs := make(chan FetchResult, numWorkers*2)
 
-	for w := 1; w <= numWorkers; w++ {
-		wg.Add(1)
+	var fetchWg sync.WaitGroup
+	var insertWg sync.WaitGroup
+
+	numInserters := numWorkers
+
+	// 1. Khởi chạy Inserter Pool
+	for i := 0; i < numInserters; i++ {
+		insertWg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer insertWg.Done()
 			ctx := context.Background()
-			
-			for ticker := range jobs {
-				if err := s.processSingleTicker(ctx, ticker); err != nil {
-					slog.ErrorContext(ctx, "Worker thất bại", slog.String("ticker", ticker), slog.String("err", err.Error()))
+
+			for result := range insertJobs {
+				// Dù thành công hay lỗi, Inserter LUÔN phải trả slice lại cho pool
+				if result.Error != nil {
+					slog.ErrorContext(ctx, "Fetch thất bại", slog.String("ticker", result.Ticker), slog.String("err", result.Error.Error()))
+					pool.CandleSlicePool.Put(result.CandlesPtr)
+					continue
 				}
+
+				candles := *result.CandlesPtr
+				if len(candles) > 0 {
+					if err := s.dbRepo.SaveCandlesAndEvents(ctx, candles); err != nil {
+						slog.ErrorContext(ctx, "Lưu Database thất bại", slog.String("ticker", result.Ticker), slog.String("err", err.Error()))
+					} else {
+						slog.InfoContext(ctx, "Backfill thành công", slog.String("ticker", result.Ticker), slog.Int("records", len(candles)))
+					}
+				}
+
+				pool.CandleSlicePool.Put(result.CandlesPtr)
+			}
+		}()
+	}
+
+	// 2. Khởi chạy Fetcher Pool
+	for w := 0; w < numWorkers; w++ {
+		fetchWg.Add(1)
+		go func() {
+			defer fetchWg.Done()
+			ctx := context.Background()
+
+			for ticker := range fetchJobs {
+				candlesPtr := pool.CandleSlicePool.Get().(*[]domain.Candle)
+				candles := (*candlesPtr)[:0]
+
+				err := s.apiClient.FetchHistoricalData(ctx, ticker, &candles)
+				*candlesPtr = candles
+
+				insertJobs <- FetchResult{
+					Ticker:     ticker,
+					CandlesPtr: candlesPtr,
+					Error:      err,
+				}
+
 				time.Sleep(500 * time.Millisecond) // Global API rate limit
 			}
 		}()
 	}
 
+	// 3. Truyền job vào queue
 	for _, t := range tickers {
-		jobs <- t
+		fetchJobs <- t
 	}
-	close(jobs)
-	wg.Wait()
+	close(fetchJobs)
+
+	fetchWg.Wait()
+	close(insertJobs)
+	insertWg.Wait()
 }
