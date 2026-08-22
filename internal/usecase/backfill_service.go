@@ -11,6 +11,8 @@ import (
 	"log/slog"
 )
 
+const MaxBatchSize = 5000
+
 type BackfillService struct {
 	apiClient domain.IMarketClient
 	dbRepo    domain.IDatabase
@@ -42,10 +44,10 @@ func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
 			defer insertWg.Done()
 			ctx := context.Background()
 
-			batchCandles := make([]domain.Candle, 0, 5000)
+			batchCandles := make([]domain.Candle, 0, MaxBatchSize)
 			batchPointers := make([]*[]domain.Candle, 0)
-			
-			// Ticker để xả buffer mỗi 1 giây (nếu chưa gom đủ 5000 nến)
+
+			// Ticker để xả buffer mỗi 1 giây (nếu chưa gom đủ MaxBatchSize nến)
 			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 
@@ -57,12 +59,12 @@ func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
 						slog.InfoContext(ctx, "Backfill Batch thành công", slog.Int("records", len(batchCandles)))
 					}
 				}
-				
+
 				// Trả các slice gốc về Pool sau khi đã ghi DB xong
 				for _, ptr := range batchPointers {
 					pool.CandleSlicePool.Put(ptr)
 				}
-				
+
 				batchCandles = batchCandles[:0]
 				batchPointers = batchPointers[:0]
 			}
@@ -86,9 +88,9 @@ func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
 					if len(candles) > 0 {
 						batchCandles = append(batchCandles, candles...)
 						batchPointers = append(batchPointers, result.CandlesPtr)
-						
+
 						// Xả xuống DB nếu đủ số lượng
-						if len(batchCandles) >= 5000 {
+						if len(batchCandles) >= MaxBatchSize {
 							flush()
 						}
 					} else {
