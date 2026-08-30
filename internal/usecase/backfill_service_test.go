@@ -52,6 +52,16 @@ func (m *MockDatabase) SaveCandlesAndEvents(ctx context.Context, candles []domai
 	return nil
 }
 
+func getTotalSavedCandles(db *MockDatabase) int {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	total := 0
+	for _, batch := range db.SavedCandles {
+		total += len(batch)
+	}
+	return total
+}
+
 func TestRunWorkerPool_Success(t *testing.T) {
 	mockAPI := &MockMarketClient{}
 	mockDB := &MockDatabase{}
@@ -60,13 +70,10 @@ func TestRunWorkerPool_Success(t *testing.T) {
 	tickers := []string{"AAPL", "GOOGL", "MSFT"}
 	numWorkers := 2
 
-	// Capture execution time
 	start := time.Now()
 	service.RunWorkerPool(tickers, numWorkers)
 	elapsed := time.Since(start)
 
-	// In the worst case, 3 tickers with 2 workers:
-	// Wait time should be at least 500ms (1 batch for sleep)
 	if elapsed < 500*time.Millisecond {
 		t.Errorf("Expected execution time to be at least 500ms, got %v", elapsed)
 	}
@@ -75,14 +82,9 @@ func TestRunWorkerPool_Success(t *testing.T) {
 		t.Errorf("Expected 3 API calls, got %d", mockAPI.FetchCallCount)
 	}
 
-	if atomic.LoadInt32(&mockDB.SaveCallCount) != 3 {
-		t.Errorf("Expected 3 DB saves, got %d", mockDB.SaveCallCount)
-	}
-
-	mockDB.mu.Lock()
-	defer mockDB.mu.Unlock()
-	if len(mockDB.SavedCandles) != 3 {
-		t.Errorf("Expected 3 batches of saved candles, got %d", len(mockDB.SavedCandles))
+	totalCandles := getTotalSavedCandles(mockDB)
+	if totalCandles != 3 {
+		t.Errorf("Expected exactly 3 candles to be saved across all batches, got %d", totalCandles)
 	}
 }
 
@@ -108,9 +110,9 @@ func TestRunWorkerPool_FetchError(t *testing.T) {
 		t.Errorf("Expected 3 API calls, got %d", mockAPI.FetchCallCount)
 	}
 
-	// Because "ERROR" fails at fetch, DB should only be called twice.
-	if atomic.LoadInt32(&mockDB.SaveCallCount) != 2 {
-		t.Errorf("Expected 2 DB saves, got %d", mockDB.SaveCallCount)
+	totalCandles := getTotalSavedCandles(mockDB)
+	if totalCandles != 2 {
+		t.Errorf("Expected exactly 2 candles to be saved across all batches (ERROR was dropped), got %d", totalCandles)
 	}
 }
 
@@ -132,28 +134,25 @@ func TestRunWorkerPool_EmptyCandles(t *testing.T) {
 
 	service.RunWorkerPool(tickers, numWorkers)
 
-	// API fetched twice
 	if atomic.LoadInt32(&mockAPI.FetchCallCount) != 2 {
 		t.Errorf("Expected 2 API calls, got %d", mockAPI.FetchCallCount)
 	}
 
-	// DB should only be called once because EMPTY has length 0
-	if atomic.LoadInt32(&mockDB.SaveCallCount) != 1 {
-		t.Errorf("Expected 1 DB save, got %d", mockDB.SaveCallCount)
+	totalCandles := getTotalSavedCandles(mockDB)
+	if totalCandles != 1 {
+		t.Errorf("Expected exactly 1 candle to be saved across all batches, got %d", totalCandles)
 	}
 }
 
 func BenchmarkRunWorkerPool(b *testing.B) {
-	// Giả lập Client API mất 50ms để tải dữ liệu mạng
 	mockAPI := &MockMarketClient{
 		FetchFunc: func(ctx context.Context, ticker string, dest *[]domain.Candle) error {
 			time.Sleep(50 * time.Millisecond)
-			*dest = make([]domain.Candle, 1000) // Giả lập trả về 1000 nến
+			*dest = make([]domain.Candle, 1000)
 			return nil
 		},
 	}
 	
-	// Giả lập Database mất 100ms để thực hiện lưu bulk insert
 	mockDB := &MockDatabase{
 		SaveFunc: func(ctx context.Context, candles []domain.Candle) error {
 			time.Sleep(100 * time.Millisecond)
@@ -163,16 +162,13 @@ func BenchmarkRunWorkerPool(b *testing.B) {
 	
 	service := NewBackfillService(mockAPI, mockDB)
 
-	// Chuẩn bị 20 tickers cho mỗi lượt benchmark
 	var tickers []string
 	for i := 0; i < 20; i++ {
 		tickers = append(tickers, "TICKER")
 	}
 
-	// Disable log cho benchmark để tránh I/O bottleneck ra stdout
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// Benchmark với 5 workers
 		service.RunWorkerPool(tickers, 5)
 	}
 }
