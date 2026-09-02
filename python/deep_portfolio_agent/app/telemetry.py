@@ -7,23 +7,28 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-tracer = trace.get_tracer("fundamental-agent")
-meter = metrics.get_meter("fundamental-agent")
+tracer = trace.get_tracer("deep-portfolio-agent")
+meter = metrics.get_meter("deep-portfolio-agent")
 
-analysis_counter = meter.create_counter(
-    "fundamental_analysis_total",
-    description="Total fundamental analysis requests completed",
+# Custom metrics
+rebalance_counter = meter.create_counter(
+    "portfolio_rebalance_total",
+    description="Total number of portfolio rebalance executions",
     unit="1"
 )
-moat_score_histogram = meter.create_histogram(
-    "fundamental_moat_score",
-    description="Distribution of Moat scores assigned to tickers",
-    unit="1"
+var_95_gauge = meter.create_gauge(
+    "portfolio_var_95",
+    description="Current portfolio Value at Risk (95% confidence)",
+    unit="percent"
+)
+es_gauge = meter.create_gauge(
+    "portfolio_expected_shortfall",
+    description="Current portfolio Expected Shortfall (ES)",
+    unit="percent"
 )
 
-def init_telemetry(app, service_name: str = "fundamental-agent"):
+def init_telemetry(service_name: str = "deep-portfolio-agent"):
     resource = Resource(attributes={"service.name": service_name})
     otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
     
@@ -38,6 +43,3 @@ def init_telemetry(app, service_name: str = "fundamental-agent"):
     reader = PeriodicExportingMetricReader(metric_exporter)
     meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
     metrics.set_meter_provider(meter_provider)
-
-    if app is not None:
-        FastAPIInstrumentor.instrument_app(app)

@@ -20,9 +20,11 @@ import (
 )
 
 var (
-	Meter           = otel.Meter("quant-backfill")
-	Tracer          = otel.Tracer("quant-backfill")
-	ApiRetryCounter metric.Int64Counter
+	Meter                    = otel.Meter("quant-backfill")
+	Tracer                   = otel.Tracer("quant-backfill")
+	ApiRetryCounter          metric.Int64Counter
+	CandlesBackfilledCounter metric.Int64Counter
+	BatchFlushCounter        metric.Int64Counter
 )
 
 type OTelLogHandler struct {
@@ -78,6 +80,22 @@ func InitObservability(ctx context.Context) (func(context.Context) error, error)
 	ApiRetryCounter, err = Meter.Int64Counter(
 		"api_fetch_retries_total",
 		metric.WithDescription("Total API retries"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	CandlesBackfilledCounter, err = Meter.Int64Counter(
+		"candles_backfilled_total",
+		metric.WithDescription("Total number of candle records backfilled into database"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	BatchFlushCounter, err = Meter.Int64Counter(
+		"batch_flush_total",
+		metric.WithDescription("Total number of multi-ticker batch flushes to database"),
 	)
 	if err != nil {
 		return nil, err

@@ -80,6 +80,17 @@ services:
     volumes:
       - chroma_data:/app/chroma_db
 
+  deep_portfolio_agent:
+    build:
+      context: ./python/deep_portfolio_agent
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://user:pass@db:5432/quantdb
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      - db
+      - otel-collector
+
   otel-collector:
     image: otel/opentelemetry-collector:0.96.0
     command: ["--config=/etc/otel-collector-config.yaml"]
