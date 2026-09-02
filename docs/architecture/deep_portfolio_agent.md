@@ -91,3 +91,9 @@ python/deep_portfolio_agent/
 
 - **Công nghệ Học sâu & Mô phỏng**: Sử dụng **JAX** (thay vì PyTorch) để tận dụng tối đa tốc độ biên dịch JIT và khả năng vectorize cực tốt cho Monte Carlo.
 - **Đầu ra thực thi**: Chưa xây dựng module đặt lệnh (Execution). Tạm thời Agent sẽ chỉ dừng lại ở bước tính toán và ghi tỷ trọng mục tiêu (Target Weights) vào Database.
+
+## 6. Mô phỏng quá trình Hội tụ của Neural Solver (Loss Curve)
+
+Dưới đây là biểu đồ mô phỏng quá trình hàm Loss (Âm Sharpe Ratio) giảm dần và hội tụ khi Neural Solver luyện tập cọ xát với hàng ngàn kịch bản Monte Carlo:
+
+![Loss Curve (Neural Solver Convergence)](images/loss_curve.png)
