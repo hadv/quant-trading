@@ -45,6 +45,7 @@ services:
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgresql://user:pass@db:5432/fractaldb
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       - db
@@ -58,6 +59,7 @@ services:
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgresql://user:pass@db:5432/fundamentaldb
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       KAFKA_BROKERS: kafka:9092
       KAFKA_CONSUMER_GROUP: fundamental_agent_group
       KAFKA_TOPIC_IN: market.events
@@ -77,6 +79,46 @@ services:
       - "8001:8000"
     volumes:
       - chroma_data:/app/chroma_db
+
+  deep_portfolio_agent:
+    build:
+      context: ./python/deep_portfolio_agent
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://user:pass@db:5432/quantdb
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      - db
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.96.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./infra/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    volumes:
+      - ./infra/otel/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    ports:
+      - "3000:3000"
 
 volumes:
   pgdata:

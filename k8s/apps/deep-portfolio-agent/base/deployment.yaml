@@ -35,3 +35,5 @@ spec:
           value: "100"
         - name: NUM_SIMULATIONS
           value: "10000"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.monitoring.svc.cluster.local:4317"
