@@ -21,7 +21,7 @@ graph TD
     end
 
     %% Trái tim Lượng tử
-    subgraph Deep Portfolio Agent (The Quant Brain)
+    subgraph deep_portfolio ["Deep Portfolio Agent (The Quant Brain)"]
         Score --> Core[Neural PDE Solver & Risk Engine]
         Metrics --> Core
         
