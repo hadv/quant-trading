@@ -43,6 +43,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fundamental Agent", lifespan=lifespan)
 
+from app.telemetry import init_telemetry
+init_telemetry(app, "fundamental-agent")
+
 @app.get("/health")
 async def health_check():
     return {

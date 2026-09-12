@@ -35,6 +35,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fractal Analyzer Agent", lifespan=lifespan)
 
+from app.telemetry import init_telemetry
+init_telemetry(app, "fractal-analyzer")
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "fractal_analyzer", "kafka_producer": kafka_manager.producer is not None, "kafka_consumer": kafka_manager.consumer is not None}

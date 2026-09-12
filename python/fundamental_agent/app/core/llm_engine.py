@@ -10,6 +10,7 @@ from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langgraph.graph import StateGraph, END
 from app.models.domain import FundamentalData, FundamentalScore, DCFResult, MoatResult
 from app.core.rag.tools import search_vector_database, get_full_financial_report
+from app.telemetry import tracer, analysis_counter, moat_score_histogram
 
 logger = logging.getLogger(__name__)
 
@@ -121,14 +122,17 @@ class LLMEngine:
         
         async def plan_node(state: AgentState):
             ticker = state["ticker"]
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", PLANNER_PROMPT),
-                ("user", "Hãy lập kế hoạch cho {ticker}")
-            ])
-            planner = prompt | self.dcf_llm.with_structured_output(Plan)
-            plan_obj = await planner.ainvoke({"ticker": ticker})
-            logger.info(f"Plan generated for {ticker}: {plan_obj.steps}")
-            return {"plan": plan_obj.steps, "past_steps": []}
+            with tracer.start_as_current_span("moat_plan_generation") as span:
+                span.set_attribute("ticker", ticker)
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", PLANNER_PROMPT),
+                    ("user", "Hãy lập kế hoạch cho {ticker}")
+                ])
+                planner = prompt | self.dcf_llm.with_structured_output(Plan)
+                plan_obj = await planner.ainvoke({"ticker": ticker})
+                logger.info(f"Plan generated for {ticker}: {plan_obj.steps}")
+                span.set_attribute("plan.step_count", len(plan_obj.steps))
+                return {"plan": plan_obj.steps, "past_steps": []}
             
         async def execute_step_node(state: AgentState):
             plan = list(state["plan"])
@@ -142,17 +146,21 @@ class LLMEngine:
             logger.info(f"Executing Moat step for {ticker}: {current_step}")
             past_steps_str = "\n".join([f"Step: {s}\nResult: {r}" for s, r in past_steps]) if past_steps else "Chưa có bước nào."
             
-            try:
-                step_result = await self.step_executor.ainvoke({
-                    "ticker": ticker,
-                    "current_step": current_step,
-                    "past_steps": past_steps_str
-                })
-                output = step_result.get("output", "No output returned")
-            except Exception as e:
-                logger.error(f"Error executing step '{current_step}': {e}")
-                output = f"Lỗi trong quá trình thực thi: {e}"
-                
+            with tracer.start_as_current_span("moat_step_execution") as span:
+                span.set_attribute("ticker", ticker)
+                span.set_attribute("step.instruction", current_step)
+                try:
+                    step_result = await self.step_executor.ainvoke({
+                        "ticker": ticker,
+                        "current_step": current_step,
+                        "past_steps": past_steps_str
+                    })
+                    output = step_result.get("output", "No output returned")
+                except Exception as e:
+                    logger.error(f"Error executing step '{current_step}': {e}")
+                    output = f"Lỗi trong quá trình thực thi: {e}"
+                    span.record_exception(e)
+                    
             past_steps.append((current_step, output))
             return {"plan": plan, "past_steps": past_steps}
             
@@ -161,19 +169,23 @@ class LLMEngine:
             past_steps = state["past_steps"]
             past_steps_str = "\n".join([f"Step: {s}\nResult: {r}" for s, r in past_steps])
             
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", MOAT_SYNTHESIZER_PROMPT),
-                ("user", "Dựa trên dữ liệu thu thập được, hãy đánh giá Moat Score cho {ticker}.")
-            ])
-            synth = prompt | self.moat_llm.with_structured_output(MoatResult)
-            
-            logger.info(f"Synthesizing Moat Result for {ticker}...")
-            try:
-                result = await synth.ainvoke({"ticker": ticker, "past_steps": past_steps_str})
-                return {"moat_score": result.moat_score, "moat_reasoning": result.moat_reasoning}
-            except Exception as e:
-                logger.error(f"Failed to synthesize Moat: {e}")
-                return {"moat_score": 5, "moat_reasoning": "Lỗi tổng hợp dữ liệu."}
+            with tracer.start_as_current_span("moat_synthesis") as span:
+                span.set_attribute("ticker", ticker)
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", MOAT_SYNTHESIZER_PROMPT),
+                    ("user", "Dựa trên dữ liệu thu thập được, hãy đánh giá Moat Score cho {ticker}.")
+                ])
+                synth = prompt | self.moat_llm.with_structured_output(MoatResult)
+                
+                logger.info(f"Synthesizing Moat Result for {ticker}...")
+                try:
+                    result = await synth.ainvoke({"ticker": ticker, "past_steps": past_steps_str})
+                    span.set_attribute("moat.score", result.moat_score)
+                    return {"moat_score": result.moat_score, "moat_reasoning": result.moat_reasoning}
+                except Exception as e:
+                    logger.error(f"Failed to synthesize Moat: {e}")
+                    span.record_exception(e)
+                    return {"moat_score": 5, "moat_reasoning": "Lỗi tổng hợp dữ liệu."}
             
         def route_next(state: AgentState):
             if len(state["plan"]) == 0:
@@ -192,43 +204,49 @@ class LLMEngine:
         return workflow.compile()
 
     async def analyze(self, data: FundamentalData, current_price: float) -> FundamentalScore:
-        logger.info(f"Invoking Parallel MoE Experts for {data.ticker}...")
-        
-        dcf_task = self.dcf_chain.ainvoke({
-            "ticker": data.ticker,
-            "pe_ratio": data.pe_ratio,
-            "pb_ratio": data.pb_ratio,
-            "free_cash_flow": data.free_cash_flow,
-            "revenue_growth_yoy": data.revenue_growth_yoy,
-            "profit_margin": data.profit_margin,
-            "debt_to_equity": data.debt_to_equity,
-            "current_price": current_price
-        })
-        
-        moat_task = self.moat_app.ainvoke({
-            "ticker": data.ticker,
-            "plan": [],
-            "past_steps": [],
-            "moat_score": 0,
-            "moat_reasoning": ""
-        })
-        
-        dcf_result, moat_state = await asyncio.gather(dcf_task, moat_task)
-        
-        moat_result = MoatResult(
-            moat_score=moat_state.get("moat_score", 5),
-            moat_reasoning=moat_state.get("moat_reasoning", "Lỗi hoặc không có thông tin.")
-        )
+        with tracer.start_as_current_span("fundamental_moe_analysis") as span:
+            span.set_attribute("ticker", data.ticker)
+            logger.info(f"Invoking Parallel MoE Experts for {data.ticker}...")
             
-        logger.info(f"Synthesizing final results for {data.ticker}...")
-        final_score = await self.synth_chain.ainvoke({
-            "ticker": data.ticker,
-            "dcf_report": dcf_result.model_dump_json() if dcf_result else "{}",
-            "moat_report": moat_result.model_dump_json(),
-            "intrinsic_value": dcf_result.intrinsic_value if dcf_result else current_price,
-            "moat_score": moat_result.moat_score
-        })
-        
-        return final_score
+            dcf_task = self.dcf_chain.ainvoke({
+                "ticker": data.ticker,
+                "pe_ratio": data.pe_ratio,
+                "pb_ratio": data.pb_ratio,
+                "free_cash_flow": data.free_cash_flow,
+                "revenue_growth_yoy": data.revenue_growth_yoy,
+                "profit_margin": data.profit_margin,
+                "debt_to_equity": data.debt_to_equity,
+                "current_price": current_price
+            })
+            
+            moat_task = self.moat_app.ainvoke({
+                "ticker": data.ticker,
+                "plan": [],
+                "past_steps": [],
+                "moat_score": 0,
+                "moat_reasoning": ""
+            })
+            
+            dcf_result, moat_state = await asyncio.gather(dcf_task, moat_task)
+            
+            moat_result = MoatResult(
+                moat_score=moat_state.get("moat_score", 5),
+                moat_reasoning=moat_state.get("moat_reasoning", "Lỗi hoặc không có thông tin.")
+            )
+                
+            logger.info(f"Synthesizing final results for {data.ticker}...")
+            final_score = await self.synth_chain.ainvoke({
+                "ticker": data.ticker,
+                "dcf_report": dcf_result.model_dump_json() if dcf_result else "{}",
+                "moat_report": moat_result.model_dump_json(),
+                "intrinsic_value": dcf_result.intrinsic_value if dcf_result else current_price,
+                "moat_score": moat_result.moat_score
+            })
+            
+            # Record Metrics
+            analysis_counter.add(1, {"ticker": data.ticker})
+            moat_score_histogram.record(moat_result.moat_score, {"ticker": data.ticker})
+            
+            return final_score
 
 llm_engine = LLMEngine()

@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/hadv/quant-trading/internal/domain"
+	"github.com/hadv/quant-trading/internal/infrastructure/telemetry"
 	"github.com/hadv/quant-trading/pkg/pool"
+	"go.opentelemetry.io/otel/attribute"
 
 	"log/slog"
 )
@@ -53,11 +55,22 @@ func (s *BackfillService) RunWorkerPool(tickers []string, numWorkers int) {
 
 			flush := func() {
 				if len(batchCandles) > 0 {
-					if err := s.dbRepo.SaveCandlesAndEvents(ctx, batchCandles); err != nil {
-						slog.ErrorContext(ctx, "Lưu Database thất bại (Batch)", slog.String("err", err.Error()))
+					flushCtx, span := telemetry.Tracer.Start(ctx, "FlushBatch")
+					span.SetAttributes(attribute.Int("records.count", len(batchCandles)))
+
+					if err := s.dbRepo.SaveCandlesAndEvents(flushCtx, batchCandles); err != nil {
+						span.RecordError(err)
+						slog.ErrorContext(flushCtx, "Lưu Database thất bại (Batch)", slog.String("err", err.Error()))
 					} else {
-						slog.InfoContext(ctx, "Backfill Batch thành công", slog.Int("records", len(batchCandles)))
+						if telemetry.CandlesBackfilledCounter != nil {
+							telemetry.CandlesBackfilledCounter.Add(flushCtx, int64(len(batchCandles)))
+						}
+						if telemetry.BatchFlushCounter != nil {
+							telemetry.BatchFlushCounter.Add(flushCtx, 1)
+						}
+						slog.InfoContext(flushCtx, "Backfill Batch thành công", slog.Int("records", len(batchCandles)))
 					}
+					span.End()
 				}
 
 				// Trả các slice gốc về Pool sau khi đã ghi DB xong

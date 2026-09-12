@@ -15,7 +15,17 @@ import (
 )
 
 func main() {
-	telemetry.InitObservability()
+	ctx := context.Background()
+	shutdown, err := telemetry.InitObservability(ctx)
+	if err != nil {
+		slog.Error("Failed to initialize observability", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			slog.Error("Failed to shutdown observability", "error", err)
+		}
+	}()
 
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
